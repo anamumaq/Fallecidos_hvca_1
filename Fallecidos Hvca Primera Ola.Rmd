@@ -1,0 +1,327 @@
+---
+title: "Análisis fallecios Covid huancavelica"
+output:
+  html_document:
+    df_print: paged
+---
+
+##### Data Minsa - Portal Datos abiertos
+
+```{r setup, include=FALSE}
+library(readr)
+library(dplyr)
+library(tidyverse)
+library(ggplot2)
+library(leaflet)
+library(ggpubr)
+
+fallecidos = read.csv2("https://cloud.minsa.gob.pe/s/Md37cjXmjT9qYSa/download")
+
+fallecidos = filter(fallecidos, fallecidos$DEPARTAMENTO == "HUANCAVELICA")
+
+fallecidos = select(fallecidos, -UUID, -DEPARTAMENTO, -DISTRITO, -FECHA_NAC, -FECHA_CORTE)
+
+fallecidos$FECHA_FALLECIMIENTO = as.character(fallecidos$FECHA_FALLECIMIENTO)
+
+fallecidos$FECHA_FALLECIMIENTO = 
+  str_c(
+    str_sub(fallecidos$FECHA_FALLECIMIENTO, 1, 4), "-",
+    str_sub(fallecidos$FECHA_FALLECIMIENTO, 5, 6), "-",
+    str_sub(fallecidos$FECHA_FALLECIMIENTO, 7, 8))
+
+fallecidos$FECHA_FALLECIMIENTO = 
+  as.Date(fallecidos$FECHA_FALLECIMIENTO)
+
+fallecidos = filter(fallecidos, fallecidos$FECHA_FALLECIMIENTO <= as.Date("2020-09-04"))
+
+####POR ALGUNA RAZON HUAROCHIRI SALE COMO DEPARTAMENTO DE HUANCAVELICA, ESTO DESDE ES UN ERROR DESDE LA BD
+fallecidos = filter(fallecidos, fallecidos$PROVINCIA != "HUAROCHIRI")
+
+
+```
+
+### Análisis departamento Huancavelica
+
+A nivel general se ve que en todo el departamento de Huancavelica, hasta el **04-09-2020** hay **107** fallecidos
+
+```{r echo=FALSE}
+data.frame (
+  fallecidos_total = count(fallecidos),
+  ultima_fechas = max(fallecidos$FECHA_FALLECIMIENTO))
+```
+
+* El primer fallecimiento se ha registrado el **04 de abril**
+* La edad mÍnima de fallecimiento es de **28 años**, para ser un fallecimiento por covid se escapa del estandar de adulto mayor
+* La edad promedio de fallecimeinto es **64 años**, con una mediana de **66 años**, siendo edades de un perfil de adulto mayor
+* El fallecimiento es un poco más elevado para personas de sexo masculino; sin embargo, según estudios de covid el sexo no necesarimente influye en el fallecimiento.
+
+```{r echo=FALSE}
+summary(fallecidos)
+```
+
+### Análisis por fecha acumulada
+
+* El primer fallecimiento se mantiene como único hasta inicios de **junio***
+* Se ve un crecimiento con mayor pendiente desde **julio**, exactamente un mes después de iniciada la **fase 3** del confinamiento (reactivación de algunas actividades)
+* Este mes se quitó le toque de queda de los domingos y se ampliaron los horarios de circulación en toda la semana
+* Durante esta fase se celebró el Día del Padre **20 jun**, según información periodistica este día hubieron celebraciones y visitas familiares
+* Las interacciones generadas el Día del Padre pudieron desencadenar contagios y aprox 1 mes después (**15na julio**) el incremento diario de muertes
+* Después del crecimiento constante el gobierno declara cuarentena focalizada en **13 agosto** para el departamento de Huancavelica
+
+
+```{r echo=FALSE}
+Fa = 
+  fallecidos %>%
+  group_by(FECHA_FALLECIMIENTO) %>%
+  summarise(deads = n())%>%
+  mutate(acum = cumsum(deads))
+
+ggplot(Fa, aes(FECHA_FALLECIMIENTO, acum)) +
+  geom_area(fill = "lightblue")+
+  geom_text(data = Fa, aes(x = FECHA_FALLECIMIENTO, y = acum, label = acum), size = 3, color = "black") +
+  geom_vline( aes( xintercept = as.Date("2020-06-01"))) +
+  geom_text ( aes(x = as.Date("2020-05-30"), y = 85, label = "Inicio Fase 3" , angle = 90), size = 3)+
+  geom_vline( aes( xintercept = as.Date("2020-08-16"))) +
+  geom_text ( aes(x = as.Date("2020-08-13"), y = 85, label = "Focalizada" , angle = 90), size = 3)+
+  geom_vline( aes( xintercept = as.Date("2020-06-20")), color = "red") +
+  geom_text ( aes(x = as.Date("2020-06-18"), y = 85, label = "Dia del Padre" , angle = 90), size = 3)+
+  xlab("Fecha de Fallecimiento")+
+  ylab("Total Fallecidos")+
+  theme_gray()
+```
+ 
+### Pendiente de crecimiento
+
+Sabemos que hay un crecimiento de muertes, pero para saber qué tanto está creciendo la curva necesitamos hallar la pendiente.
+Para este caso se excluirá la primera muerte debido a lo alejado del crecimiento de las otras.
+
+Estimamos una regresión lineal para saber la pendiente que generaron los casos en el tiempo a partir de junio (el segundo contagio)
+
+* El crecimiento de los fallecidos en Huacavelica ha sido de **1** por día desde **junio** a *setiembre**
+
+
+```{r echo=FALSE}
+Fa = 
+  fallecidos %>%
+  filter(FECHA_FALLECIMIENTO >= as.Date("2020-05-01")) %>%
+  group_by(FECHA_FALLECIMIENTO) %>%
+  summarise(deads = n())%>%
+  mutate(acum = cumsum(deads))
+
+
+ggplot(Fa, aes(FECHA_FALLECIMIENTO, acum)) +
+  geom_point()+
+  geom_smooth(method = "lm", formula = y ~ x, se = FALSE)+
+  stat_cor(label.y = 75)+ #this means at 35th unit in the y axis, the r squared and p value will be shown
+  stat_regline_equation(label.y = 70)+
+  xlab("Fecha de Fallecimiento")+
+  ylab("Total Fallecidos")+
+  theme_grey()
+```
+
+### Pendiente de crecimiento por segmento
+
+Ahora dividiremos en 4 secciones la linea de tiempo, con esto podremos ver un análisis de crecimiento por cada etapa y analizar el comportamiento después de algunas acciones tomadas.
+
+* El **Segmento I** se condiera desde segundo caso hasta antes el primer pico en julio *días después "día del Padre"*
+* Para el **segmento II** consideramos todo el mes de julio, donde empieza el crecimiento de fallecidos por no cumplir las medidas los meses anteriores
+* En el **segmento III**, tomamos todo el mes de agosto *(contiene el día de inicio de la cuarentene focalizada para huancavelica)*, aquí se consideran como gatillador de fallecimiento los contagios de la etapa anterior y la sobrecapacidad que los centros de salud
+* El último **segmento IV** desde inicio de septiembre refleja las medida tomadas 15 días atrás *(inicio de cuarentena focalizada)*
+
+* La pendiente del **Segmento I** muestra un crecimiento leve de **0.36**, donde podriamos decir que cada 7 dias fallecen 2 personas
+* La pendiente del **Segmento II** muestra un elevado **0.86**, donde aprox cada dos días fallece una persona y a la semana fallecen 6.
+* En este **Segmento III** el ratio de fallecimiento se eleva a **1.7**, donde a la semana fallecieron 11 a 12 personas, además se ha duplicado el ratio de crecimiento respecto al **segmento II**  y casi quintuplicado  respecto al **segmento I**
+* El **Segmento IV** muestra como la pendiente es un poco más plana reduciendose a **1.1** el ratio de fallecimieto, es decir hubo paroz una muerte al día
+
+* **Hasta ahora podemos concluir que durante el mes de agosto la pendiente fue más elevada, reflejando la flexibilidad que hubo durante todo el mes de julio. En septiembre se ve un descenso poco menos de la mitad, esto debido a las recticciones aplicadas 15 días antes. Si se acatan las medidas necesarias podremos mantener la capacidad instalada en los hospitales y reducir los fallecimientos**
+
+
+```{r echo=FALSE }
+Fa = 
+  fallecidos %>%
+  filter(FECHA_FALLECIMIENTO >= as.Date("2020-05-01")) %>%
+  group_by(FECHA_FALLECIMIENTO) %>%
+  summarise(deads = n())%>%
+  mutate(acum = cumsum(deads)) %>%
+  mutate(etapas = 
+        ifelse(
+          FECHA_FALLECIMIENTO < as.Date("2020-07-01"), 
+          "Segmento I",
+          ifelse(
+            FECHA_FALLECIMIENTO >= as.Date("2020-07-01") & 
+            FECHA_FALLECIMIENTO < as.Date("2020-08-01"), 
+            "Segmento II",
+            ifelse(
+              FECHA_FALLECIMIENTO >= as.Date("2020-08-01") & 
+              FECHA_FALLECIMIENTO < as.Date("2020-09-01"), 
+              "Segmento III",
+              "Segmento IV"
+            )
+          )
+        )
+      )
+
+ggplot(Fa, aes(FECHA_FALLECIMIENTO, acum)) +
+  geom_point() +
+  geom_smooth(method = "lm", formula = y ~ x, se = FALSE)+
+  stat_cor(label.y = 70) + 
+  stat_regline_equation(label.y = 63) +
+  facet_wrap( ~ etapas,  scales = "free") +
+  labs( y = "Fallecidos Total", 
+        x = "Fecha Fallecimiento")+
+  theme_grey()
+
+```
+
+
+
+
+
+
+### Análisis por Edad de fallecimiento
+
+* En Huancavelica la edad de los 107 fallecidos estuvo más concentrada entre **60 y 75 años**
+* El promedio de la edad es **64 años** y la mediana en **66años**
+* Como las personas que pueden ser mas afectadas con el virus son los adulto mayores, como se ve reflejado, se podría decir que en Huancavelica apartir de los 60 años aumenta la frecuencia de muerte por covid
+* A partir de los 75 la cantidad de fallecidos empieza a descender, esto debido a que en el grupo de adultos mayores solo el 20% es mayor de 75 años
+  [Informacion al 2015 del MIMP] (https://www.mimp.gob.pe/adultomayor/regiones/Huancavelica2.html)
+
+
+```{r echo=FALSE}
+
+#Fa = 
+ # fallecidos %>%
+  #group_by(EDAD_DECLARADA)%>%
+  #summarise(deads = n())
+
+ggplot(fallecidos, aes(EDAD_DECLARADA)) +
+  geom_histogram(binwidth = 4, aes(y=..density..), colour="black", fill="white") +
+  geom_density(alpha=.2, fill="#FF6666") +
+  geom_vline(xintercept = mean(fallecidos$EDAD_DECLARADA), color = "blue") +
+  geom_text(aes(x = mean(fallecidos$EDAD_DECLARADA)-1, y = 0.038, label = round(mean(fallecidos$EDAD_DECLARADA),1), angle = 90), size = 4) +
+  geom_vline(xintercept = median(fallecidos$EDAD_DECLARADA), color = "red") +
+  geom_text(aes(x = median(fallecidos$EDAD_DECLARADA)-1, y = 0.038, label = round(median(fallecidos$EDAD_DECLARADA),2), angle = 90), size = 4) +
+  labs( title = "Histograma y densidad estimada de la edad",
+        x = "Edad de Fallecimiento",
+        y = "Densidad")+
+  theme_gray()
+  
+  
+```
+
+
+### Edad de fallecimiento por provincia
+
+* Acobamba es la provincia con la menor edad promedio de aprox **56 años**
+* Angaraes tiene la mayor edad promedio de fallecimiento de aprox **71 años**
+* Huancavelica tiene el fallecido con menor edad de todas las provincias
+* Los gráficos por provincias nos muestra entre que edades se encuentran concentrados más fallecidos
+
+```{r echo=FALSE}
+
+ggplot(fallecidos, aes( x = PROVINCIA, y = EDAD_DECLARADA, color = PROVINCIA)) +
+  geom_violin()+
+  geom_boxplot(width=0.1)+
+  geom_jitter(color="black", size=0.6, alpha=0.9) +
+  labs( y = "Edad de Fallecimiento",
+        x = "") +
+  coord_flip()+
+  theme_gray()
+
+```
+
+
+### Fallecidos según sexo por distrito
+
+* Se puede ver la cantidad total de fallecidos en cada provincia, siendo la provincia de Huancavelica la que cuenta con más fallecidos **51** y la menor Churcampa con **5**
+* Notamos la diferencia entre la cantidad de personas de sexo masculino y femenino por provincia
+* En Castrovirreyna se ve una mayor direncia de **5 a 1 de varones vs mujeres**
+* En Churcampa es la única provincia conde hubieron más mujeres que hombres fallecidos
+
+```{r echo=FALSE}
+
+Fa = 
+  fallecidos %>%
+  group_by(PROVINCIA, SEXO) %>%
+  summarise(deads = n())%>%
+  mutate(deads = if_else(SEXO == "MASCULINO", -deads, deads))
+
+## find the order
+temp_df = Fa %>% 
+          filter(SEXO == "FEMENINO") %>% 
+          arrange(deads)
+
+the_order = temp_df$PROVINCIA
+
+ggplot(Fa, aes(PROVINCIA, deads, group = SEXO, fill=SEXO)) +
+    geom_bar(stat="identity")+
+    coord_flip()+
+    scale_x_discrete(limits = the_order) +
+  # another trick!
+    scale_y_continuous(breaks = seq(-80, 80, 10), 
+                  labels = abs(seq(-80, 80, 10))) +
+    geom_text(data = Fa, aes( label = abs(deads)), size = 3, color = "black") +
+    labs(x = "", y = "Fallecimientos") +
+    theme_gray()
+
+```
+
+
+
+### Edad de fallecimiento según sexo
+
+* La edad de fallecimiento de las mujeres llega hasta aprox los 85 años; sin embargo, la de los hombres sobre pasalos 90 años
+* Respecto a la edad más joven de fallecimiento se encuentra en el grupo femenino
+* En promedio la edad de hombre vs mujeres no presenta mayor diferencia de 1 o 2 años
+* La mayor cantidad de fallecidos hombres se encuentran agrupados entre los **50 y 80 años**
+* Para el caso de las mujeres fueron pocas las fallecidas con edad alrededor de **50 años**; sin embargo, se muestra un leve aumento en las menores de **40 años**
+
+
+```{r echo=FALSE}
+
+ggplot(fallecidos, aes( x = SEXO, y = EDAD_DECLARADA, color = SEXO)) +
+  geom_violin()+
+  geom_boxplot(width=0.1)+
+  geom_jitter(color="black", size=0.6, alpha=0.9) +
+  labs( y = "Edad de Fallecimiento",
+        x = "") +
+  coord_flip()+
+  theme_gray()
+
+```
+
+### Edad de fallecimiento según fecha de ocurrencia
+
+* La mayor cantidad de fallecidos se encuentran agrupados entre agosto y setiembre para ambos sexos
+* En el caso de las mujeres se muestra mayor cantidad de fallecidas durante la primera etapa del confinamiento **junio a 15na de julio**
+* De **agosto a setiembre** el fallecimiento de mujeres tuvo un ligero aunento
+* En el caso los hombres, durante la primera etapa **junio a agosto** los fallecimientos se mantuvieron por debajo de los registrados en mujeres, opero con subidas constantes
+* De **agosto a setiembre** el fallecimiento de hombres se elevó drásticamente superando al de las mujeres
+
+```{r echo=FALSE}
+
+ggplot(fallecidos, aes(FECHA_FALLECIMIENTO, color = SEXO)) +
+  geom_density() +
+  #geom_vline(xintercept = mean(fallecidos$EDAD_DECLARADA)) +
+  #geom_text(aes(x = mean(fallecidos$EDAD_DECLARADA)-1, y = 0.038, label = round(mean(fallecidos$EDAD_DECLARADA),1), angle = 90), size = 4) +
+  #geom_vline(xintercept = median(fallecidos$EDAD_DECLARADA), color = "red") +
+  #geom_text(aes(x = median(fallecidos$EDAD_DECLARADA)-1, y = 0.038, label = round(median(fallecidos$EDAD_DECLARADA),2), angle = 90), size = 4) +
+  labs( title = "Densidad estimada de la edad según fecha",
+        x = "Fecha de Fallecimiento",
+        y = "Densidad")+
+  theme_gray()
+  
+  
+```
+
+## Observaciones:
+
+* Se tomaron alrededor de los 100 primeros casos de fallecimiento para analizar el perfil de los fallecidos y el impacto de las medidas tomadas en el tiempo
+* Los datos son tomados del MINSA del portal de datos abiertos (https://www.datosabiertos.gob.pe/dataset/fallecidos-por-covid-19-ministerio-de-salud-minsa)
+* A la fecha de este informe (fines de setiembre) existe una direncia entre los datos del MINSA y DIRESA REGIONAL
+* Existe mayor facilidad de acceso al dataset del MINSA, los datos de la DIRESA están publicados en .pdf o en .jpg, dificultando una analisis comparativo rápido
+* El informe tiene como finalidad analizar lo que pasó en base a la data pública, no se pretende proyectar ningún número
+* Compartir el reporte ayuda mucho a que otras personas generen su propio análisis y puedan realizar conclusiones que no contemplanos aquí
+
+
+ - El conocimiento no sirve de nada si no se comparte -
